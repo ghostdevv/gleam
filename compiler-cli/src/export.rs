@@ -1,17 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2022 The Gleam contributors
 
-use crate::fs::{self, ZipArchive};
+use crate::{
+    command_build,
+    fs::{self, ZipArchive, get_os},
+};
 use camino::Utf8PathBuf;
+use clap::ValueEnum;
+use gleam_core::build::Telemetry;
 use gleam_core::{
     Result,
     analyse::TargetSupport,
     build::{Codegen, Compile, ErlangOutput, Mode, Options, Target},
-    docs, io,
+    docs,
+    error::ShellCommandFailureReason,
+    io,
     paths::ProjectPaths,
     type_::ModuleFunction,
 };
-use std::io::Cursor;
+use serde::{Deserialize, Serialize};
+use std::{io::Cursor, time::Instant};
+use strum::{Display, EnumString, VariantNames};
 
 static ENTRYPOINT_FILENAME_POWERSHELL: &str = "entrypoint.ps1";
 static ENTRYPOINT_FILENAME_POSIX_SHELL: &str = "entrypoint.sh";
@@ -281,4 +290,159 @@ pub fn package_information(paths: &ProjectPaths, out: Option<Utf8PathBuf>) -> Re
     let config = crate::config::root_config(paths)?;
     let information = docs::package_information_as_json(config);
     write_path_or_stdout(paths, out, information)
+}
+
+fn command_output_to_str(output: std::process::Output) -> String {
+    let mut stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    if !output.stderr.is_empty() {
+        stdout.push('\n');
+        stdout.push_str(&String::from_utf8_lossy(&output.stderr).to_string());
+    }
+    stdout
+}
+
+fn map_shell_error(program: String, e: std::io::Error) -> gleam_core::Error {
+    match e.kind() {
+        std::io::ErrorKind::NotFound => gleam_core::Error::ShellProgramNotFound {
+            program,
+            os: get_os(),
+        },
+        other => gleam_core::Error::ShellCommand {
+            program,
+            reason: ShellCommandFailureReason::IoError(other),
+        },
+    }
+}
+
+#[derive(
+    Debug, Serialize, Deserialize, Display, EnumString, VariantNames, ValueEnum, Clone, Copy,
+)]
+#[strum(serialize_all = "lowercase")]
+#[clap(rename_all = "lower")]
+pub enum PorfforTarget {
+    Native,
+    WASM,
+}
+
+pub fn porffor(paths: &ProjectPaths, target: PorfforTarget) -> Result<()> {
+    let built = command_build(paths, Some(Target::JavaScript), false, false)?;
+    let name = built.root_package.config.name.as_str();
+    let telemetry = &crate::cli::Reporter;
+    let start = Instant::now();
+
+    let program_file = paths
+        .build_directory_for_package(built.mode, Target::JavaScript, name)
+        .join(format!("{}.mjs", name));
+
+    let dest_dir = paths.build_directory_for_mode(built.mode).join("porffor");
+    let bundle_file = dest_dir.join("bundle.mjs");
+    let entry_file = dest_dir.join("entry.mjs");
+
+    // todo: I feel like I saw somewhere that gleam generates this?
+    //       If so can we reuse that logic
+    fs::write(
+        &entry_file,
+        &format!("import {{ main }} from \"{}\";\nmain();", program_file),
+    )?;
+
+    // I tried with rolldown to avoid the external esbuild dependency, but it added
+    // too much to the binary size of gleam, so we will stick with esbuild for now
+    //
+    // let runtime = tokio::runtime::Runtime::new().expect("Unable to start Tokio async runtime");
+    // let mut bundler = rolldown::Bundler::new(rolldown::BundlerOptions {
+    //     input: Some(vec![entry_file.to_string().into()]),
+    //     file: Some(bundle_file.to_string()),
+    //     platform: Some(rolldown::Platform::Node),
+    //     code_splitting: Some(rolldown::CodeSplittingMode::Bool(false)),
+    //     ..Default::default()
+    // })
+    // .expect("failed to create rolldown bundler");
+    //
+    // let _ = runtime
+    //     .block_on(bundler.write())
+    //     .expect("failed to write bundle");
+
+    let output = std::process::Command::new("esbuild")
+        .arg("--bundle")
+        .arg("--platform=node")
+        .arg("--format=esm")
+        .arg("--target=esnext")
+        .arg(format!("--outfile={}", bundle_file.to_string()))
+        .arg(&entry_file)
+        .output()
+        .map_err(|e| map_shell_error("esbuild".into(), e))?;
+
+    if !output.status.success() {
+        return Err(gleam_core::Error::EsbuildFailed {
+            code: output.status.code(),
+            error: command_output_to_str(output),
+        });
+    }
+
+    telemetry.bundled_js(start.elapsed());
+
+    let porffor_output = match target {
+        PorfforTarget::Native => dest_dir.join(name),
+        PorfforTarget::WASM => dest_dir.join(format!("{}.c", name)),
+    };
+
+    let output = std::process::Command::new("porf")
+        .arg(match target {
+            PorfforTarget::Native => "native",
+            PorfforTarget::WASM => "c",
+        })
+        .arg("--module")
+        .arg(bundle_file)
+        .arg(format!("-o={}", &porffor_output))
+        .output()
+        .map_err(|e| map_shell_error("porf".into(), e))?;
+
+    if !output.status.success() {
+        return Err(gleam_core::Error::PorfforFailed {
+            code: output.status.code(),
+            error: command_output_to_str(output),
+        });
+    }
+
+    telemetry.porffored(start.elapsed());
+
+    if matches!(target, PorfforTarget::WASM) {
+        let wasi_sdk_output = dest_dir.join(format!("{}.wasm", name));
+
+        let output = std::process::Command::new("/opt/wasi-sdk/bin/clang")
+            // Porffor C output
+            .arg(porffor_output)
+            // Output WASM file
+            .arg("-o")
+            .arg(wasi_sdk_output)
+            // Compile to WASM target
+            .arg("--target=wasm32-wasip1")
+            // WASM has no signal support, so use minimal signal emulation
+            .arg("-D_WASI_EMULATED_SIGNAL")
+            .arg("-lwasi-emulated-signal")
+            // Enable non-yet-standardised Exception handling
+            .arg("-mllvm")
+            .arg("-wasm-enable-sjlj")
+            .arg("-lsetjmp")
+            .arg("-mllvm")
+            .arg("-wasm-use-legacy-eh=false")
+            // WASM lacks a true mmap, so use a minimal mmap emulation
+            .arg("-D_WASI_EMULATED_MMAN")
+            .arg("-lwasi-emulated-mman")
+            // Optimisation
+            .arg("-O2")
+            .output()
+            .map_err(|e| map_shell_error("/opt/wasi-sdk/bin/clang".into(), e))?;
+
+        if !output.status.success() {
+            return Err(gleam_core::Error::WasmificationFailed {
+                code: output.status.code(),
+                error: command_output_to_str(output),
+            });
+        }
+
+        telemetry.wasmified(start.elapsed());
+    }
+
+    Ok(())
 }

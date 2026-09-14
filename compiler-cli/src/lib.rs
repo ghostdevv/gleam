@@ -95,11 +95,13 @@ use clap::{
 };
 use gleam_core::{
     analyse::TargetSupport,
-    build::{Codegen, Compile, ErlangOutput, Mode, NullTelemetry, Options, Runtime, Target},
+    build::{Built, Codegen, Compile, ErlangOutput, Mode, NullTelemetry, Options, Runtime, Target},
     hex::RetirementReason,
     paths::ProjectPaths,
     version::COMPILER_VERSION,
 };
+
+use crate::export::PorfforTarget;
 
 #[derive(Args, Debug, Clone)]
 pub struct UpdateOptions {
@@ -460,7 +462,8 @@ impl Command {
                 no_print_progress,
             } => {
                 let paths = find_project_paths(directory)?;
-                command_build(&paths, target, warnings_as_errors, no_print_progress)
+                let _ = command_build(&paths, target, warnings_as_errors, no_print_progress)?;
+                Ok(())
             }
 
             Self::Check { target } => {
@@ -666,6 +669,10 @@ impl Command {
                 let paths = find_project_paths(directory)?;
                 export::package_information(&paths, output)
             }
+            Self::Export(ExportTarget::Porffor { target }) => {
+                let paths = find_project_paths(directory)?;
+                export::porffor(&paths, target)
+            }
         }
     }
 }
@@ -726,6 +733,10 @@ pub enum ExportTarget {
         /// If ommited, the command will print to stdout.
         #[arg(verbatim_doc_comment, long = "out")]
         output: Option<Utf8PathBuf>,
+    },
+    Porffor {
+        #[arg(long = "target", default_value = "native", required = false)]
+        target: PorfforTarget,
     },
 }
 
@@ -990,13 +1001,13 @@ fn command_build(
     target: Option<Target>,
     warnings_as_errors: bool,
     no_print_progress: bool,
-) -> Result<()> {
+) -> Result<Built> {
     let manifest = if no_print_progress {
         build::download_dependencies(paths, NullTelemetry)?
     } else {
         build::download_dependencies(paths, cli::Reporter::new())?
     };
-    let _ = build::main(
+    let built = build::main(
         paths,
         Options {
             root_target_support: TargetSupport::Enforced,
@@ -1010,7 +1021,7 @@ fn command_build(
         },
         manifest,
     )?;
-    Ok(())
+    Ok(built)
 }
 
 fn print_config(paths: &ProjectPaths) -> Result<()> {

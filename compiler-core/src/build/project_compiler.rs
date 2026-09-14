@@ -62,6 +62,7 @@ pub struct Options {
 
 #[derive(Debug)]
 pub struct Built {
+    pub mode: Mode,
     pub root_package: Package,
     pub module_interfaces: imbl::HashMap<EcoString, type_::ModuleInterface>,
 }
@@ -222,6 +223,7 @@ where
         }
 
         Ok(Built {
+            mode: self.mode(),
             root_package,
             module_interfaces: self.importable_modules,
         })

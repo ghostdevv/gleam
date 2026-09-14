@@ -19,6 +19,9 @@ pub trait Telemetry: Debug {
     fn compiling_package(&self, name: &str);
     fn checked_package(&self, duration: Duration);
     fn checking_package(&self, name: &str);
+    fn bundled_js(&self, duration: Duration);
+    fn porffored(&self, duration: Duration);
+    fn wasmified(&self, duration: Duration);
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -32,7 +35,10 @@ impl Telemetry for NullTelemetry {
     fn compiled_package(&self, _duration: Duration) {}
     fn compiling_package(&self, _name: &str) {}
     fn checked_package(&self, _duration: Duration) {}
+    fn bundled_js(&self, _duration: Duration) {}
     fn checking_package(&self, _name: &str) {}
     fn packages_downloaded(&self, _start: Instant, _count: usize) {}
     fn resolved_package_versions(&self, _changes: &PackageChanges) {}
+    fn porffored(&self, _duration: Duration) {}
+    fn wasmified(&self, _duration: Duration) {}
 }

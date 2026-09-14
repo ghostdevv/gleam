@@ -453,6 +453,15 @@ file_names.iter().map(|x| x.as_str()).join(", "))]
     /// dependencies of the project!
     #[error("these packages are already dependencies: {packages:?}")]
     AddedDevDependenciesAreAlreadyDependencies { packages: Vec<EcoString> },
+
+    #[error("esbuild failed: {error}")]
+    EsbuildFailed { error: String, code: Option<i32> },
+
+    #[error("porffor failed: {error}")]
+    PorfforFailed { error: String, code: Option<i32> },
+
+    #[error("wasmification failed: {error}")]
+    WasmificationFailed { error: String, code: Option<i32> },
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -2642,6 +2651,30 @@ project's `gleam.toml`."
                     }],
                 }
             }
+
+            Error::EsbuildFailed { code, error } => vec![Diagnostic {
+                title: format!("Esbuild failed with code {:?}", code),
+                text: error.to_owned(),
+                level: Level::Error,
+                location: None,
+                hint: None,
+            }],
+
+            Error::PorfforFailed { error, code } => vec![Diagnostic {
+                title: format!("Porffor failed with code {:?}", code),
+                text: error.to_owned(),
+                level: Level::Error,
+                location: None,
+                hint: None,
+            }],
+
+            Error::WasmificationFailed { error, code } => vec![Diagnostic {
+                title: format!("Wasmification failed with code {:?}", code),
+                text: error.to_owned(),
+                level: Level::Error,
+                location: None,
+                hint: None,
+            }],
         }
     }
 }

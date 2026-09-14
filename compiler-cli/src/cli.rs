@@ -64,6 +64,18 @@ impl Telemetry for Reporter {
     fn resolved_package_versions(&self, changes: &PackageChanges) {
         print_package_changes(changes);
     }
+
+    fn bundled_js(&self, duration: Duration) {
+        print_bundled_js(duration);
+    }
+
+    fn porffored(&self, duration: Duration) {
+        print_porffored(duration);
+    }
+
+    fn wasmified(&self, duration: Duration) {
+        print_wasmified(duration);
+    }
 }
 
 pub fn ask(question: &str) -> Result<String, Error> {
@@ -156,6 +168,18 @@ pub(crate) fn print_checked(duration: Duration) {
 
 pub(crate) fn print_running(text: &str) {
     print_colourful_prefix("Running", text);
+}
+
+pub(crate) fn print_bundled_js(duration: Duration) {
+    print_colourful_prefix("Bundled", &format!("in {}", seconds(duration)));
+}
+
+pub(crate) fn print_porffored(duration: Duration) {
+    print_colourful_prefix("Porffor-ed", &format!("in {}", seconds(duration)));
+}
+
+pub(crate) fn print_wasmified(duration: Duration) {
+    print_colourful_prefix("Wasmified", &format!("in {}", seconds(duration)));
 }
 
 pub(crate) fn print_package_changes(changes: &PackageChanges) {
