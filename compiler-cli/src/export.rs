@@ -324,7 +324,7 @@ pub enum PorfforTarget {
     WASM,
 }
 
-pub fn porffor(paths: &ProjectPaths, target: PorfforTarget) -> Result<()> {
+pub fn porffor(paths: &ProjectPaths, target: PorfforTarget, porf: Option<String>) -> Result<()> {
     let built = command_build(paths, Some(Target::JavaScript), false, false)?;
     let name = built.root_package.config.name.as_str();
     let telemetry = &crate::cli::Reporter;
@@ -335,8 +335,7 @@ pub fn porffor(paths: &ProjectPaths, target: PorfforTarget) -> Result<()> {
         .join(format!("{}.mjs", name));
 
     let dest_dir = paths.build_directory_for_mode(built.mode).join("porffor");
-    let bundle_file = dest_dir.join("bundle.mjs");
-    let entry_file = dest_dir.join("entry.mjs");
+    let mut entry_file = dest_dir.join("entry.mjs");
 
     // todo: I feel like I saw somewhere that gleam generates this?
     //       If so can we reuse that logic
@@ -362,40 +361,50 @@ pub fn porffor(paths: &ProjectPaths, target: PorfforTarget) -> Result<()> {
     //     .block_on(bundler.write())
     //     .expect("failed to write bundle");
 
-    let output = std::process::Command::new("esbuild")
-        .arg("--bundle")
-        .arg("--platform=node")
-        .arg("--format=esm")
-        .arg("--target=esnext")
-        .arg(format!("--outfile={}", bundle_file.to_string()))
-        .arg(&entry_file)
-        .output()
-        .map_err(|e| map_shell_error("esbuild".into(), e))?;
+    // For now we can just say that if there is a custom porf binary
+    // We should bundle. This entire step will likely be removed anyway
+    // and was just added so I can benchmark old and new porffor versions
+    if porf.is_some() {
+        let bundle_file = dest_dir.join("bundle.mjs");
 
-    if !output.status.success() {
-        return Err(gleam_core::Error::EsbuildFailed {
-            code: output.status.code(),
-            error: command_output_to_str(output),
-        });
+        let output = std::process::Command::new("esbuild")
+            .arg("--bundle")
+            .arg("--platform=node")
+            .arg("--format=esm")
+            .arg("--target=esnext")
+            .arg(format!("--outfile={}", bundle_file.to_string()))
+            .arg(&entry_file)
+            .output()
+            .map_err(|e| map_shell_error("esbuild".into(), e))?;
+
+        if !output.status.success() {
+            return Err(gleam_core::Error::EsbuildFailed {
+                code: output.status.code(),
+                error: command_output_to_str(output),
+            });
+        }
+
+        entry_file = bundle_file;
+        telemetry.bundled_js(start.elapsed());
     }
-
-    telemetry.bundled_js(start.elapsed());
 
     let porffor_output = match target {
         PorfforTarget::Native => dest_dir.join(name),
         PorfforTarget::WASM => dest_dir.join(format!("{}.c", name)),
     };
 
-    let output = std::process::Command::new("porf")
+    let porf = porf.unwrap_or("porf".into());
+
+    let output = std::process::Command::new(&porf)
         .arg(match target {
             PorfforTarget::Native => "native",
             PorfforTarget::WASM => "c",
         })
         .arg("--module")
-        .arg(bundle_file)
+        .arg(entry_file)
         .arg(format!("-o={}", &porffor_output))
         .output()
-        .map_err(|e| map_shell_error("porf".into(), e))?;
+        .map_err(|e| map_shell_error(porf, e))?;
 
     if !output.status.success() {
         return Err(gleam_core::Error::PorfforFailed {

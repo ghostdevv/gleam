@@ -669,9 +669,9 @@ impl Command {
                 let paths = find_project_paths(directory)?;
                 export::package_information(&paths, output)
             }
-            Self::Export(ExportTarget::Porffor { target }) => {
+            Self::Export(ExportTarget::Porffor { target, porf }) => {
                 let paths = find_project_paths(directory)?;
-                export::porffor(&paths, target)
+                export::porffor(&paths, target, porf)
             }
         }
     }
@@ -737,6 +737,9 @@ pub enum ExportTarget {
     Porffor {
         #[arg(long = "target", default_value = "native", required = false)]
         target: PorfforTarget,
+
+        #[arg(long = "porf", required = false)]
+        porf: Option<String>,
     },
 }
 
