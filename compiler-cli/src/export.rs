@@ -3,13 +3,12 @@
 
 use crate::{
     command_build,
-    fs::{self, ZipArchive, get_os},
+    fs::{self, ConsoleWarningEmitter, ZipArchive, get_os},
 };
 use camino::Utf8PathBuf;
 use clap::ValueEnum;
-use gleam_core::build::Telemetry;
 use gleam_core::{
-    Result,
+    Result, Warning,
     analyse::TargetSupport,
     build::{Codegen, Compile, ErlangOutput, Mode, Options, Target},
     docs,
@@ -18,8 +17,9 @@ use gleam_core::{
     paths::ProjectPaths,
     type_::ModuleFunction,
 };
+use gleam_core::{build::Telemetry, warning::WarningEmitter};
 use serde::{Deserialize, Serialize};
-use std::{io::Cursor, time::Instant};
+use std::{io::Cursor, rc::Rc, time::Instant};
 use strum::{Display, EnumString, VariantNames};
 
 static ENTRYPOINT_FILENAME_POWERSHELL: &str = "entrypoint.ps1";
@@ -324,11 +324,73 @@ pub enum PorfforTarget {
     WASM,
 }
 
+enum PorfforVersion {
+    Alpha(i8),
+    Unknown(String),
+}
+
+impl PorfforVersion {
+    fn supports_esm(&self) -> bool {
+        match self {
+            PorfforVersion::Alpha(alpha) => *alpha >= 9,
+            _ => false,
+        }
+    }
+
+    fn wasm_working(&self) -> bool {
+        match self {
+            PorfforVersion::Alpha(alpha) => *alpha == 5,
+            _ => false,
+        }
+    }
+}
+
+fn parse_porffor_version(porf: &str) -> Result<PorfforVersion> {
+    let output = std::process::Command::new(porf)
+        .arg("--version")
+        .output()
+        .map_err(|e| map_shell_error(porf.to_string(), e))?;
+
+    if !output.status.success() {
+        return Err(gleam_core::Error::PorfforVersionCheckFailed {
+            code: output.status.code(),
+            error: command_output_to_str(output),
+        });
+    }
+
+    let version = command_output_to_str(output);
+
+    let alpha_version = regex::Regex::new(r"alpha (\d+) \([a-z0-9]{7} [\d-]+\)")
+        .unwrap()
+        .captures(&version)
+        .and_then(|c| c.get(1).map(|s| s.as_str().parse::<i8>().ok()))
+        .flatten();
+
+    if let Some(alpha) = alpha_version {
+        Ok(PorfforVersion::Alpha(alpha))
+    } else {
+        Ok(PorfforVersion::Unknown(version))
+    }
+}
+
 pub fn porffor(paths: &ProjectPaths, target: PorfforTarget, porf: Option<String>) -> Result<()> {
-    let built = command_build(paths, Some(Target::JavaScript), false, false)?;
-    let name = built.root_package.config.name.as_str();
+    let warnings = WarningEmitter::new(Rc::new(ConsoleWarningEmitter));
     let telemetry = &crate::cli::Reporter;
     let start = Instant::now();
+
+    let porf = porf.unwrap_or("porf".into());
+    let version = parse_porffor_version(&porf)?;
+
+    if let PorfforVersion::Unknown(v) = &version {
+        warnings.emit(Warning::PorfforUnknownVersion { version: v.clone() });
+    }
+
+    if matches!(target, PorfforTarget::WASM) && !version.wasm_working() {
+        warnings.emit(Warning::PorfforWasmUntested);
+    }
+
+    let built = command_build(paths, Some(Target::JavaScript), false, false)?;
+    let name = built.root_package.config.name.as_str();
 
     let program_file = paths
         .build_directory_for_package(built.mode, Target::JavaScript, name)
@@ -344,27 +406,7 @@ pub fn porffor(paths: &ProjectPaths, target: PorfforTarget, porf: Option<String>
         &format!("import {{ main }} from \"{}\";\nmain();", program_file),
     )?;
 
-    // I tried with rolldown to avoid the external esbuild dependency, but it added
-    // too much to the binary size of gleam, so we will stick with esbuild for now
-    //
-    // let runtime = tokio::runtime::Runtime::new().expect("Unable to start Tokio async runtime");
-    // let mut bundler = rolldown::Bundler::new(rolldown::BundlerOptions {
-    //     input: Some(vec![entry_file.to_string().into()]),
-    //     file: Some(bundle_file.to_string()),
-    //     platform: Some(rolldown::Platform::Node),
-    //     code_splitting: Some(rolldown::CodeSplittingMode::Bool(false)),
-    //     ..Default::default()
-    // })
-    // .expect("failed to create rolldown bundler");
-    //
-    // let _ = runtime
-    //     .block_on(bundler.write())
-    //     .expect("failed to write bundle");
-
-    // For now we can just say that if there is a custom porf binary
-    // We should bundle. This entire step will likely be removed anyway
-    // and was just added so I can benchmark old and new porffor versions
-    if porf.is_some() {
+    if !version.supports_esm() {
         let bundle_file = dest_dir.join("bundle.mjs");
 
         let output = std::process::Command::new("esbuild")
@@ -392,8 +434,6 @@ pub fn porffor(paths: &ProjectPaths, target: PorfforTarget, porf: Option<String>
         PorfforTarget::Native => dest_dir.join(name),
         PorfforTarget::WASM => dest_dir.join(format!("{}.c", name)),
     };
-
-    let porf = porf.unwrap_or("porf".into());
 
     let output = std::process::Command::new(&porf)
         .arg(match target {

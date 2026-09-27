@@ -186,6 +186,12 @@ pub enum Warning {
         src: EcoString,
         location: SrcSpan,
     },
+
+    PorfforUnknownVersion {
+        version: String,
+    },
+
+    PorfforWasmUntested,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -1596,6 +1602,22 @@ an error in a future version.",
                 title: "Empty module".into(),
                 text: format!("Module '{name}' contains no public definitions."),
                 hint: Some("You can safely remove this module.".into()),
+                level: diagnostic::Level::Warning,
+                location: None,
+            },
+
+            Warning::PorfforUnknownVersion { version } => Diagnostic {
+                title: "Unknown Porffor Version".into(),
+                text: format!("Found unknown porffor version: \"{version}\""),
+                hint: None,
+                level: diagnostic::Level::Warning,
+                location: None,
+            },
+
+            Warning::PorfforWasmUntested => Diagnostic {
+                title: "Wasm Untested".into(),
+                text: "Wasm output for this Porffor version is untested, and may not work as expected. The last working version tested was Alpha 5".into(),
+                hint: None,
                 level: diagnostic::Level::Warning,
                 location: None,
             },

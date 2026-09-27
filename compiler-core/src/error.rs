@@ -460,6 +460,9 @@ file_names.iter().map(|x| x.as_str()).join(", "))]
     #[error("porffor failed: {error}")]
     PorfforFailed { error: String, code: Option<i32> },
 
+    #[error("porffor version check failed: {error}")]
+    PorfforVersionCheckFailed { error: String, code: Option<i32> },
+
     #[error("wasmification failed: {error}")]
     WasmificationFailed { error: String, code: Option<i32> },
 }
@@ -2662,6 +2665,14 @@ project's `gleam.toml`."
 
             Error::PorfforFailed { error, code } => vec![Diagnostic {
                 title: format!("Porffor failed with code {:?}", code),
+                text: error.to_owned(),
+                level: Level::Error,
+                location: None,
+                hint: None,
+            }],
+
+            Error::PorfforVersionCheckFailed { error, code } => vec![Diagnostic {
+                title: format!("Porffor Version Check failed with code {:?}", code),
                 text: error.to_owned(),
                 level: Level::Error,
                 location: None,
