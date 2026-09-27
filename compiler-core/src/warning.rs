@@ -1615,8 +1615,8 @@ an error in a future version.",
             },
 
             Warning::PorfforWasmUntested => Diagnostic {
-                title: "Wasm Untested".into(),
-                text: "Wasm output for this Porffor version is untested, and may not work as expected. The last working version tested was Alpha 5".into(),
+                title: "Wasmifiability Unknown".into(),
+                text: "Wasm output for this Porffor version is broken or untested, and may not work as expected. The latest working version we tested is Alpha 6.".into(),
                 hint: None,
                 level: diagnostic::Level::Warning,
                 location: None,

@@ -339,7 +339,7 @@ impl PorfforVersion {
 
     fn wasm_working(&self) -> bool {
         match self {
-            PorfforVersion::Alpha(alpha) => *alpha == 5,
+            PorfforVersion::Alpha(alpha) => *alpha > 1 && *alpha <= 6,
             _ => false,
         }
     }
